@@ -607,7 +607,9 @@ function buildSaveObj() {
 function applyData(d) {
   if (!d) return;
   S.people          = d.people          || [];
-  S.wcs             = d.wcs             || [];
+  S.wcs             = (d.wcs || []).map(function(w) {
+    return {id:w.id||uid(), name:w.name||'', shifts: w.shifts||[], capacity:w.capacity||0};
+  });
   S.notices         = d.notices         || [];
   if (d.activeWC !== undefined) S.activeWC = d.activeWC;
   S.payRates        = d.payRates        || {};
@@ -901,7 +903,7 @@ let CAL_FILTER_PERSON='all'; // personId or 'all'
 function addPerson(name,role,phone){S.people.push({id:uid(),name,role,phone});save();render()}
 function removePerson(id){if(!confirm('Remove this person?'))return;S.people=S.people.filter(p=>p.id!==id);S.wcs.forEach(w=>{w.shifts=w.shifts.filter(s=>s.personId!==id)});S.shiftLogs=S.shiftLogs.filter(l=>l.personId!==id);save();render()}
 function editPerson(id,name,role,phone){const p=S.people.find(x=>x.id===id);if(p){p.name=name;p.role=role;p.phone=phone;save();render()}}
-function addWC(name){const w={id:uid(),name,shifts:[]};S.wcs.push(w);S.activeWC=w.id;save();render()}
+function addWC(name){const w={id:uid(),name:name,shifts:[]};S.wcs.push(w);S.activeWC=w.id;save();render()}
 function removeWC(id){if(!confirm('Remove this station?'))return;S.wcs=S.wcs.filter(w=>w.id!==id);S.activeWC=S.wcs[0]?.id||null;S.shiftLogs=S.shiftLogs.filter(l=>l.wcId!==id);save();render()}
 function renameWC(id,name){const w=S.wcs.find(w=>w.id===id);if(w){w.name=name;save();render()}}
 function activeWC(){return S.wcs.find(w=>w.id===S.activeWC)||null}
@@ -939,6 +941,7 @@ function generateTodaysLogs(){
   const wk=weekKey(today);
   const ppk=payPeriodKey(dk);
   S.wcs.forEach(wc=>{
+    if(!wc.shifts)return;
     wc.shifts.forEach(sh=>{
       const dayData=sh.days[di];
       if(!dayData?.active)return;
@@ -1853,8 +1856,8 @@ function renderShiftNotifications(){
 }
 
 function renderStats(){
-  const tp=S.people.length,ts=S.wcs.length,ta=S.wcs.reduce((s,w)=>s+w.shifts.length,0);
-  const th=S.wcs.reduce((s,wc)=>s+wc.shifts.reduce((s2,sh)=>s2+shiftHours(sh.days),0),0);
+  const tp=S.people.length,ts=S.wcs.length,ta=S.wcs.reduce((s,w)=>s+(w.shifts?w.shifts.length:0),0);
+  const th=S.wcs.reduce((s,wc)=>s+(wc.shifts?wc.shifts.reduce((s2,sh)=>s2+shiftHours(sh.days),0):0),0);
   // Pending verifications for admin
   const pendingVerify=S.shiftLogs.filter(l=>l.status==='logged').length;
   const pendingConfirm=S.shiftLogs.filter(l=>l.status==='pending').length;
