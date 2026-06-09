@@ -579,11 +579,12 @@ var S = {
 // ════════════════════════════════════════
 // FIREBASE REALTIME DATABASE
 // ════════════════════════════════════════
-var FB_DB = null;       // Firebase database reference
-var FB_REF = null;      // /saf-data reference
+var FB_DB = null;
+var FB_REF = null;
 var FB_LISTENING = false;
 var _saveTimer = null;
 var _lastSavedJSON = '';
+var _saveInFlight = false;  // true while a save is pending/in-progress
 
 // ── HARDCODED FIREBASE CONFIG — South Alder Farms ──
 var SAF_FB_CONFIG = {
@@ -636,7 +637,9 @@ function startListening() {
     var data = snapshot.val();
     if (!data) return;
     var remoteJSON = JSON.stringify(data);
-    // Apply remote data to S always (this is the source of truth)
+    // Don't overwrite local state while we're in the middle of saving
+    if (_saveInFlight) return;
+    // Apply remote data to S
     S.people          = data.people          || [];
     S.wcs             = data.wcs             || [];
     S.notices         = data.notices         || [];
@@ -669,22 +672,23 @@ function save() {
     try { localStorage.setItem('SAF_DATA', JSON.stringify(buildSaveObj())); } catch(e) {}
     return;
   }
+  _saveInFlight = true;
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(function() {
     var obj = buildSaveObj();
     var json = JSON.stringify(obj);
     showSyncIndicator('saving');
     FB_REF.set(obj, function(err) {
+      _saveInFlight = false;
       if (err) {
         showSyncIndicator('error');
-        // Fallback to localStorage
         try { localStorage.setItem('SAF_DATA', json); } catch(e) {}
       } else {
         _lastSavedJSON = json;
         showSyncIndicator('saved');
       }
     });
-  }, 400); // debounce 400ms
+  }, 400);
 }
 
 function buildSaveObj() {
@@ -2883,3 +2887,4 @@ document.addEventListener('DOMContentLoaded', function() {
 </div>
 </body>
 </html>
+  
