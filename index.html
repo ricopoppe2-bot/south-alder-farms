@@ -610,13 +610,16 @@ function initFirebase(cfg, onReady, onError) {
     loaded++;
     if (loaded < scripts.length) return;
     try {
+      console.log('[SAF] Initializing Firebase...');
       if (!firebase.apps || !firebase.apps.length) {
         firebase.initializeApp(SAF_FB_CONFIG);
       }
       FB_DB = firebase.database();
       FB_REF = FB_DB.ref('saf-data');
+      console.log('[SAF] Firebase initialized OK, ref:', FB_REF.toString());
       onReady();
     } catch(e) {
+      console.error('[SAF] Firebase init error:', e);
       onError(e.message || 'Firebase init failed');
     }
   }
@@ -667,9 +670,12 @@ function startListening() {
 }
 
 function save() {
+  // Always save to localStorage immediately as backup
+  try { localStorage.setItem('SAF_DATA', JSON.stringify(buildSaveObj())); } catch(e) {}
+
   if (!FB_REF) {
-    // Fallback to localStorage if Firebase not set up
-    try { localStorage.setItem('SAF_DATA', JSON.stringify(buildSaveObj())); } catch(e) {}
+    console.warn('[SAF] FB_REF not ready - saved to localStorage only');
+    render();
     return;
   }
   _saveInFlight = true;
@@ -677,13 +683,15 @@ function save() {
   _saveTimer = setTimeout(function() {
     var obj = buildSaveObj();
     var json = JSON.stringify(obj);
+    console.log('[SAF] Saving to Firebase...', {people: obj.people.length, wcs: obj.wcs.length});
     showSyncIndicator('saving');
     FB_REF.set(obj, function(err) {
       _saveInFlight = false;
       if (err) {
+        console.error('[SAF] Firebase save FAILED:', err);
         showSyncIndicator('error');
-        try { localStorage.setItem('SAF_DATA', json); } catch(e) {}
       } else {
+        console.log('[SAF] Firebase save SUCCESS');
         _lastSavedJSON = json;
         showSyncIndicator('saved');
       }
@@ -2720,14 +2728,16 @@ function showLoginOrApp() {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
+  // Load localStorage data immediately so app isn't blank while Firebase connects
+  loadData();
+  console.log('[SAF] Local data loaded:', {people: S.people.length, wcs: S.wcs.length});
+
   initFirebase(SAF_FB_CONFIG, function() {
-    // Firebase connected — start real-time listener then show login/app
+    console.log('[SAF] Firebase ready, starting listener...');
     startListening();
     showLoginOrApp();
   }, function(err) {
-    // Firebase failed — fall back to localStorage
-    console.warn('Firebase failed, using localStorage:', err);
-    loadData();
+    console.warn('[SAF] Firebase failed, using localStorage only:', err);
     showLoginOrApp();
   });
 });
@@ -2887,4 +2897,3 @@ document.addEventListener('DOMContentLoaded', function() {
 </div>
 </body>
 </html>
-  
