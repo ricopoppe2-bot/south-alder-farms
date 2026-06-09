@@ -577,16 +577,13 @@ var S = {
 };
 
 // ════════════════════════════════════════
-// FIREBASE REALTIME DATABASE
+// PERSISTENCE — localStorage + Firebase
 // ════════════════════════════════════════
 var FB_DB = null;
 var FB_REF = null;
-var FB_LISTENING = false;
+var FB_READY = false;
 var _saveTimer = null;
-var _lastSavedJSON = '';
-var _saveInFlight = false;  // true while a save is pending/in-progress
 
-// ── HARDCODED FIREBASE CONFIG — South Alder Farms ──
 var SAF_FB_CONFIG = {
   apiKey:            "AIzaSyCOiIYIxmXpu_rl7P1iTeEDrEb4Idg3XiI",
   authDomain:        "south-alder-farms.firebaseapp.com",
@@ -596,108 +593,6 @@ var SAF_FB_CONFIG = {
   messagingSenderId: "454575594187",
   appId:             "1:454575594187:web:641189146790ccd49f994e"
 };
-
-function getFbConfig() { return SAF_FB_CONFIG; }
-function setFbConfig(cfg) { /* config is hardcoded — nothing to save */ }
-
-function initFirebase(cfg, onReady, onError) {
-  var scripts = [
-    'https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js',
-    'https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js'
-  ];
-  var loaded = 0;
-  function tryInit() {
-    loaded++;
-    if (loaded < scripts.length) return;
-    try {
-      console.log('[SAF] Initializing Firebase...');
-      if (!firebase.apps || !firebase.apps.length) {
-        firebase.initializeApp(SAF_FB_CONFIG);
-      }
-      FB_DB = firebase.database();
-      FB_REF = FB_DB.ref('saf-data');
-      console.log('[SAF] Firebase initialized OK, ref:', FB_REF.toString());
-      onReady();
-    } catch(e) {
-      console.error('[SAF] Firebase init error:', e);
-      onError(e.message || 'Firebase init failed');
-    }
-  }
-  scripts.forEach(function(src) {
-    if (document.querySelector('script[src="' + src + '"]')) { tryInit(); return; }
-    var s = document.createElement('script');
-    s.src = src;
-    s.onload = tryInit;
-    s.onerror = function() { onError('Failed to load Firebase SDK. Check your internet connection.'); };
-    document.head.appendChild(s);
-  });
-}
-
-function startListening() {
-  if (FB_LISTENING || !FB_REF) return;
-  FB_LISTENING = true;
-  FB_REF.on('value', function(snapshot) {
-    var data = snapshot.val();
-    if (!data) return;
-    var remoteJSON = JSON.stringify(data);
-    // Don't overwrite local state while we're in the middle of saving
-    if (_saveInFlight) return;
-    // Apply remote data to S
-    S.people          = data.people          || [];
-    S.wcs             = data.wcs             || [];
-    S.notices         = data.notices         || [];
-    S.activeWC        = data.activeWC        || S.activeWC;
-    S.payRates        = data.payRates        || {};
-    S.shiftLogs       = data.shiftLogs       || [];
-    S.payments        = data.payments        || [];
-    S.leaveRequests   = data.leaveRequests   || [];
-    S.workerNotes     = data.workerNotes     || [];
-    S.swapRequests    = data.swapRequests    || [];
-    S.availability    = data.availability   || {};
-    S.stationCapacity = data.stationCapacity || {};
-    customAccounts    = data.customAccounts  || [];
-    _lastSavedJSON = remoteJSON;
-    // Only show sync indicator and re-render if app is visible
-    if (document.getElementById('app-screen') &&
-        document.getElementById('app-screen').style.display !== 'none') {
-      showSyncIndicator('synced');
-      render();
-    }
-  }, function(err) {
-    showSyncIndicator('error');
-    console.error('Firebase read error:', err);
-  });
-}
-
-function save() {
-  // Always save to localStorage immediately as backup
-  try { localStorage.setItem('SAF_DATA', JSON.stringify(buildSaveObj())); } catch(e) {}
-
-  if (!FB_REF) {
-    console.warn('[SAF] FB_REF not ready - saved to localStorage only');
-    render();
-    return;
-  }
-  _saveInFlight = true;
-  clearTimeout(_saveTimer);
-  _saveTimer = setTimeout(function() {
-    var obj = buildSaveObj();
-    var json = JSON.stringify(obj);
-    console.log('[SAF] Saving to Firebase...', {people: obj.people.length, wcs: obj.wcs.length});
-    showSyncIndicator('saving');
-    FB_REF.set(obj, function(err) {
-      _saveInFlight = false;
-      if (err) {
-        console.error('[SAF] Firebase save FAILED:', err);
-        showSyncIndicator('error');
-      } else {
-        console.log('[SAF] Firebase save SUCCESS');
-        _lastSavedJSON = json;
-        showSyncIndicator('saved');
-      }
-    });
-  }, 400);
-}
 
 function buildSaveObj() {
   return {
@@ -709,32 +604,116 @@ function buildSaveObj() {
   };
 }
 
-function loadData() {
-  // Used as fallback / initial local load before Firebase connects
-  var keys = ['SAF_DATA','saf_data','saf_v6','saf_v5','saf_v4'];
-  var raw = null;
-  for (var k = 0; k < keys.length; k++) {
-    raw = localStorage.getItem(keys[k]);
-    if (raw) break;
-  }
-  if (!raw) return;
-  try {
-    var d = JSON.parse(raw);
-    S.people          = d.people          || [];
-    S.wcs             = d.wcs             || [];
-    S.notices         = d.notices         || [];
-    S.activeWC        = d.activeWC        || null;
-    S.payRates        = d.payRates        || {};
-    S.shiftLogs       = d.shiftLogs       || [];
-    S.payments        = d.payments        || [];
-    S.leaveRequests   = d.leaveRequests   || [];
-    S.workerNotes     = d.workerNotes     || [];
-    S.swapRequests    = d.swapRequests    || [];
-    S.availability    = d.availability    || {};
-    S.stationCapacity = d.stationCapacity || {};
-    customAccounts    = d.customAccounts  || [];
-  } catch(e) {}
+function applyData(d) {
+  if (!d) return;
+  S.people          = d.people          || [];
+  S.wcs             = d.wcs             || [];
+  S.notices         = d.notices         || [];
+  if (d.activeWC !== undefined) S.activeWC = d.activeWC;
+  S.payRates        = d.payRates        || {};
+  S.shiftLogs       = d.shiftLogs       || [];
+  S.payments        = d.payments        || [];
+  S.leaveRequests   = d.leaveRequests   || [];
+  S.workerNotes     = d.workerNotes     || [];
+  S.swapRequests    = d.swapRequests    || [];
+  S.availability    = d.availability    || {};
+  S.stationCapacity = d.stationCapacity || {};
+  customAccounts    = d.customAccounts  || [];
 }
+
+// Load from localStorage immediately (instant, works offline)
+function loadData() {
+  var keys = ['SAF_DATA','saf_data','saf_v6','saf_v5','saf_v4'];
+  for (var k = 0; k < keys.length; k++) {
+    var raw = localStorage.getItem(keys[k]);
+    if (raw) {
+      try { applyData(JSON.parse(raw)); return true; } catch(e) {}
+    }
+  }
+  return false;
+}
+
+// Save: always write localStorage immediately, then Firebase
+function save() {
+  var obj = buildSaveObj();
+  var json = JSON.stringify(obj);
+
+  // 1. Always save to localStorage RIGHT NOW (synchronous, instant)
+  try { localStorage.setItem('SAF_DATA', json); } catch(e) {}
+
+  // 2. Also push to Firebase (async)
+  if (FB_READY && FB_REF) {
+    clearTimeout(_saveTimer);
+    _saveTimer = setTimeout(function() {
+      showSyncIndicator('saving');
+      FB_REF.set(JSON.parse(json), function(err) {
+        if (err) {
+          console.error('[SAF] Firebase write error:', err.message || err);
+          showSyncIndicator('error');
+        } else {
+          showSyncIndicator('saved');
+        }
+      });
+    }, 600);
+  }
+}
+
+function initAndConnect(onDone) {
+  var scripts = [
+    'https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js',
+    'https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js'
+  ];
+  var loaded = 0;
+  function tryConnect() {
+    loaded++;
+    if (loaded < scripts.length) return;
+    try {
+      if (!firebase.apps || !firebase.apps.length) {
+        firebase.initializeApp(SAF_FB_CONFIG);
+      }
+      FB_DB = firebase.database();
+      FB_REF = FB_DB.ref('saf-data');
+      FB_READY = true;
+
+      // Listen for remote changes
+      FB_REF.on('value', function(snap) {
+        var remote = snap.val();
+        if (!remote) return;
+        var remoteStr = JSON.stringify(remote);
+        var localStr  = localStorage.getItem('SAF_DATA') || '';
+        // Only apply remote if it's different from what we have locally
+        if (remoteStr !== localStr) {
+          applyData(remote);
+          try { localStorage.setItem('SAF_DATA', remoteStr); } catch(e) {}
+          showSyncIndicator('synced');
+          var app = document.getElementById('app-screen');
+          if (app && app.style.display !== 'none') render();
+        }
+      }, function(err) {
+        console.error('[SAF] Firebase listen error:', err.message || err);
+      });
+
+      onDone();
+    } catch(e) {
+      console.error('[SAF] Firebase connect error:', e.message || e);
+      onDone(); // still proceed without Firebase
+    }
+  }
+  scripts.forEach(function(src) {
+    var existing = document.querySelector('script[src="' + src + '"]');
+    if (existing) { tryConnect(); return; }
+    var s = document.createElement('script');
+    s.src = src;
+    s.onload = tryConnect;
+    s.onerror = function() {
+      console.warn('[SAF] Could not load Firebase SDK');
+      loaded++;
+      if (loaded >= scripts.length) onDone();
+    };
+    document.head.appendChild(s);
+  });
+}
+
 
 function showSyncIndicator(state) {
   var el = document.getElementById('sync-indicator');
@@ -2728,16 +2707,11 @@ function showLoginOrApp() {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
-  // Load localStorage data immediately so app isn't blank while Firebase connects
+  // Step 1: load localStorage immediately so app has data right away
   loadData();
-  console.log('[SAF] Local data loaded:', {people: S.people.length, wcs: S.wcs.length});
-
-  initFirebase(SAF_FB_CONFIG, function() {
-    console.log('[SAF] Firebase ready, starting listener...');
-    startListening();
-    showLoginOrApp();
-  }, function(err) {
-    console.warn('[SAF] Firebase failed, using localStorage only:', err);
+  // Step 2: connect to Firebase in background (also syncs latest cloud data)
+  initAndConnect(function() {
+    // Step 3: show login or app
     showLoginOrApp();
   });
 });
