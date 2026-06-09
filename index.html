@@ -635,11 +635,8 @@ function startListening() {
   FB_REF.on('value', function(snapshot) {
     var data = snapshot.val();
     if (!data) return;
-    // Only update if remote data is different from what we just saved
     var remoteJSON = JSON.stringify(data);
-    if (remoteJSON === _lastSavedJSON) return;
-    _lastSavedJSON = remoteJSON;
-    // Apply remote data to S
+    // Apply remote data to S always (this is the source of truth)
     S.people          = data.people          || [];
     S.wcs             = data.wcs             || [];
     S.notices         = data.notices         || [];
@@ -653,8 +650,11 @@ function startListening() {
     S.availability    = data.availability   || {};
     S.stationCapacity = data.stationCapacity || {};
     customAccounts    = data.customAccounts  || [];
-    showSyncIndicator('synced');
-    if (document.getElementById('app-screen').style.display !== 'none') {
+    _lastSavedJSON = remoteJSON;
+    // Only show sync indicator and re-render if app is visible
+    if (document.getElementById('app-screen') &&
+        document.getElementById('app-screen').style.display !== 'none') {
+      showSyncIndicator('synced');
       render();
     }
   }, function(err) {
@@ -673,7 +673,6 @@ function save() {
   _saveTimer = setTimeout(function() {
     var obj = buildSaveObj();
     var json = JSON.stringify(obj);
-    if (json === _lastSavedJSON) return; // no change
     showSyncIndicator('saving');
     FB_REF.set(obj, function(err) {
       if (err) {
@@ -2699,57 +2698,35 @@ function renderPersonNotesSection(personId){
 
 
 /* ============================================================
-   PAGE INIT
+   PAGE INIT — runs after DOM is fully ready
    ============================================================ */
-// ── FIREBASE SETUP HANDLERS ──
-window.doFbConnect = function() {
-  var url = (document.getElementById('fb-url')?.value || '').trim();
-  var key = (document.getElementById('fb-key')?.value || '').trim();
-  var pid = (document.getElementById('fb-pid')?.value || '').trim();
-  var appid = (document.getElementById('fb-appid')?.value || '').trim();
-  var errEl = document.getElementById('fb-err');
-  if (!url || !key || !pid) { errEl.textContent='Please fill in Database URL, API Key, and Project ID.';errEl.style.display='block';return; }
-  errEl.style.display='none';
-  var btn = document.querySelector('.fb-btn');
-  if(btn){btn.textContent='Connecting…';btn.disabled=true;}
-  var cfg = {databaseURL:url,apiKey:key,projectId:pid,appId:appid};
-  initFirebase(cfg, function(){
-    setFbConfig(cfg);
-    document.getElementById('fb-setup').style.display='none';
-    startListening();
-    showLoginOrApp();
-  }, function(err){
-    if(btn){btn.innerHTML='<i class="ti ti-plug-connected"></i> Connect &amp; continue';btn.disabled=false;}
-    errEl.textContent='Connection failed: '+err;errEl.style.display='block';
-  });
-};
-window.skipFirebase = function(){
-  localStorage.setItem('SAF_SKIP_FB','1');
-  document.getElementById('fb-setup').style.display='none';
-  loadData();
-  showLoginOrApp();
-};
-function showLoginOrApp(){
-  try{
-    var s=JSON.parse(sessionStorage.getItem('SAF_SESS')||'null');
-    if(s&&s.id&&s.username){
-      var acc=allAccounts().find(function(a){return a.id===s.id&&a.username===s.username;});
-      if(acc){SESSION={id:acc.id,username:acc.username,role:acc.role,displayName:acc.displayName};bootApp();return;}
+function showLoginOrApp() {
+  try {
+    var s = JSON.parse(sessionStorage.getItem('SAF_SESS') || 'null');
+    if (s && s.id && s.username) {
+      var acc = allAccounts().find(function(a) { return a.id===s.id && a.username===s.username; });
+      if (acc) {
+        SESSION = {id:acc.id, username:acc.username, role:acc.role, displayName:acc.displayName};
+        bootApp();
+        return;
+      }
     }
-  }catch(e){}
-  document.getElementById('login-screen').style.display='flex';
+  } catch(e) {}
+  document.getElementById('login-screen').style.display = 'flex';
 }
-(function(){
-  // Config is hardcoded — always connect to Firebase automatically
-  initFirebase(SAF_FB_CONFIG, function(){
+
+document.addEventListener('DOMContentLoaded', function() {
+  initFirebase(SAF_FB_CONFIG, function() {
+    // Firebase connected — start real-time listener then show login/app
     startListening();
     showLoginOrApp();
-  }, function(err){
-    console.warn('Firebase connection failed, using local storage:', err);
+  }, function(err) {
+    // Firebase failed — fall back to localStorage
+    console.warn('Firebase failed, using localStorage:', err);
     loadData();
     showLoginOrApp();
   });
-})();
+});
 </script>
 
 
