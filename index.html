@@ -1356,7 +1356,7 @@ function renderModal(){
     const wkMon=weekStart(CAL_DATE);
     const wkk=weekKey(CAL_DATE);
     const wkSun=addDays(wkMon,6);
-    const wkLabel=`${MONTHS[wkMon.getMonth()].slice(0,3)} ${wkMon.getDate()} – ${MONTHS[wkSun.getMonth()].slice(0,3)} ${wkSun.getDate()}`;
+    const wkLabel=`${MONTHS[wkMon.getMonth()].slice(0,3)} ${wkMon.getDate()} – ${MONTHS[wkSun.getMonth()].slice(0,3)} ${wkSun.getDate()}, ${wkSun.getFullYear()}`;
     const isThisRealWeek=sameDay(wkMon,weekStart(new Date()));
     const overrideExists=ex?hasWeekOverride(ex,wkk):false;
     // _editMode: 'default' = edit the recurring weekly pattern (applies to all weeks without an override)
@@ -1369,7 +1369,16 @@ function renderModal(){
 
     const sc=scFor(wc?.id);
     box.innerHTML=`<h3>${ex?'Edit':'Assign'} shifts — <strong>${p?.name||''}</strong></h3>
-      <div class="sub">Station: <span style="font-weight:700;color:${sc.tx}">${wc?.name||''}</span> &nbsp;·&nbsp; Viewing week: <strong>${wkLabel}</strong>${isThisRealWeek?' (current)':''}</div>
+      <div class="sub">Station: <span style="font-weight:700;color:${sc.tx}">${wc?.name||''}</span></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:.85rem;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r)">
+        <button type="button" class="btn sm" onclick="navEditWeek(-1)" title="Previous week"><i class="ti ti-chevron-left"></i></button>
+        <div style="flex:1;text-align:center">
+          <div style="font-weight:800;font-size:13px">${wkLabel}</div>
+          ${isThisRealWeek?'<div style="font-size:10px;color:var(--g2);font-weight:700">CURRENT WEEK</div>':'<div style="font-size:10px;color:var(--text3)">&nbsp;</div>'}
+        </div>
+        <button type="button" class="btn sm" onclick="navEditWeek(1)" title="Next week"><i class="ti ti-chevron-right"></i></button>
+        ${!isThisRealWeek?`<button type="button" class="btn sm" onclick="navEditWeekToday()" title="Jump to current week"><i class="ti ti-calendar-event"></i></button>`:''}
+      </div>
       ${ex?`<div style="display:flex;gap:6px;margin-bottom:.85rem">
         <button type="button" id="mode-default-btn" class="btn sm${_editMode==='default'?' primary':''}" onclick="setEditMode('default')" style="flex:1"><i class="ti ti-repeat"></i> Default pattern (every week)</button>
         <button type="button" id="mode-week-btn" class="btn sm${_editMode==='week'?' primary':''}" onclick="setEditMode('week')" style="flex:1"><i class="ti ti-calendar-event"></i> This week only</button>
@@ -1809,6 +1818,16 @@ window.doSaveShift=function(wcId,pid){
 window.setEditMode=function(mode){
   if(mode===_editMode)return;
   openModal('editShift',{wcId:_editShiftCtx.wcId,personId:_editShiftCtx.personId,mode:mode});
+}
+window.navEditWeek=function(n){
+  if(!_editShiftCtx)return;
+  CAL_DATE=addDays(CAL_DATE,n*7);
+  openModal('editShift',{wcId:_editShiftCtx.wcId,personId:_editShiftCtx.personId});
+}
+window.navEditWeekToday=function(){
+  if(!_editShiftCtx)return;
+  CAL_DATE=new Date();
+  openModal('editShift',{wcId:_editShiftCtx.wcId,personId:_editShiftCtx.personId});
 }
 window.removeWeekOverrideAndClose=function(){
   const ctx=_editShiftCtx;if(!ctx)return;
