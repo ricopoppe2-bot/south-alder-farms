@@ -1361,9 +1361,11 @@ function renderModal(){
     const overrideExists=ex?hasWeekOverride(ex,wkk):false;
     // _editMode: 'default' = edit the recurring weekly pattern (applies to all weeks without an override)
     //            'week'    = edit just this specific week (only this week, doesn't touch other weeks)
+    // M.mode lets setEditMode() explicitly force a mode when re-opening this same modal;
+    // otherwise we default to 'week' if an override already exists, else 'default'.
+    _editMode = M.mode ? M.mode : (overrideExists?'week':'default');
     _editShiftCtx={wcId:wc?.id,personId:M.personId,weekKey:wkk};
-    _editMode=overrideExists?'week':'default';
-    _editDays=ex?JSON.parse(JSON.stringify(getWeekDays(ex,wkk))):defaultDays();
+    _editDays=ex?JSON.parse(JSON.stringify(_editMode==='week'?getWeekDays(ex,wkk):ex.days)):defaultDays();
 
     const sc=scFor(wc?.id);
     box.innerHTML=`<h3>${ex?'Edit':'Assign'} shifts — <strong>${p?.name||''}</strong></h3>
@@ -1806,15 +1808,7 @@ window.doSaveShift=function(wcId,pid){
 }
 window.setEditMode=function(mode){
   if(mode===_editMode)return;
-  const ex=(S.wcs.find(w=>w.id===_editShiftCtx?.wcId)||{}).shifts?.find(s=>s.personId===_editShiftCtx?.personId);
-  _editMode=mode;
-  if(ex && _editShiftCtx){
-    const wkk=_editShiftCtx.weekKey;
-    _editDays=mode==='week'
-      ? JSON.parse(JSON.stringify(getWeekDays(ex,wkk)))
-      : JSON.parse(JSON.stringify(ex.days));
-  }
-  openModal('editShift',{wcId:_editShiftCtx.wcId,personId:_editShiftCtx.personId});
+  openModal('editShift',{wcId:_editShiftCtx.wcId,personId:_editShiftCtx.personId,mode:mode});
 }
 window.removeWeekOverrideAndClose=function(){
   const ctx=_editShiftCtx;if(!ctx)return;
