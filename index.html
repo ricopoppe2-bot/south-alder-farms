@@ -1315,8 +1315,11 @@ function renderModal(){
     const ex=wc?.shifts.find(s=>s.personId===M.personId);
     _editDays=ex?JSON.parse(JSON.stringify(ex.days)):defaultDays();
     const sc=scFor(wc?.id);
+    const wkMon=weekStart(new Date());
+    const wkSun=addDays(wkMon,6);
+    const wkLabel=`${MONTHS[wkMon.getMonth()].slice(0,3)} ${wkMon.getDate()} – ${MONTHS[wkSun.getMonth()].slice(0,3)} ${wkSun.getDate()}`;
     box.innerHTML=`<h3>${ex?'Edit':'Assign'} shifts — <strong>${p?.name||''}</strong></h3>
-      <div class="sub">Station: <span style="font-weight:700;color:${sc.tx}">${wc?.name||''}</span> &nbsp;·&nbsp; Set individual hours per day.</div>
+      <div class="sub">Station: <span style="font-weight:700;color:${sc.tx}">${wc?.name||''}</span> &nbsp;·&nbsp; Set individual hours per day. <span style="color:var(--text3)">This recurring weekly schedule shows dates for ${wkLabel} as a reference.</span></div>
       <div class="day-grid" id="day-grid">${buildDayGrid()}</div>
       <div id="hours-preview" style="margin-top:.75rem;font-size:12px;color:var(--text2)"></div>
       <div class="mfooter">
@@ -1639,13 +1642,19 @@ function renderManageUsers(box){
 }
 
 function buildDayGrid(){
-  const cards=_editDays.map((d,i)=>`
+  const mon=weekStart(new Date()); // current week's Monday, used to show real dates
+  const cards=_editDays.map((d,i)=>{
+    const dDate=addDays(mon,i);
+    const dateLabel=`${MONTHS[dDate.getMonth()].slice(0,3)} ${dDate.getDate()}`;
+    return`
     <div class="day-card${d.active?' on':''}" id="dc${i}">
       <label><input type="checkbox" ${d.active?'checked':''} onchange="toggleEDay(${i},this.checked)">${DS[i]}</label>
+      <div style="font-size:9px;color:var(--text3);text-align:center;margin-top:-2px;margin-bottom:3px">${dateLabel}</div>
       <input class="tin" type="time" value="${d.start}" ${d.active?'':'disabled'} id="dc${i}-start" onchange="_editDays[${i}].start=this.value;updateHoursPreview()" title="Start">
       <input class="tin" type="time" value="${d.end}" ${d.active?'':'disabled'} id="dc${i}-end" onchange="_editDays[${i}].end=this.value;updateHoursPreview()" title="End">
       ${i===0?`<button type="button" style="margin-top:4px;width:100%;padding:3px 0;font-size:9px;font-weight:700;border:1px dashed var(--g1);border-radius:4px;background:transparent;color:var(--g2);cursor:pointer" onclick="copyMonToAll()" title="Copy Monday to all active days">Copy to all ↓</button>`:''}
-    </div>`).join('');
+    </div>`;
+  }).join('');
   return cards;
 }
 function updateHoursPreview(){
