@@ -841,6 +841,33 @@ function dateKey(d){return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(
 function weekKey(d){const m=weekStart(d);return dateKey(m)}
 function currentWeekKey(){return weekKey(new Date())}
 function defaultDays(){return Array.from({length:7},(_,i)=>({active:i<5,start:'08:00',end:'16:00'}))}
+
+// ── WEEK-SPECIFIC OVERRIDES ──
+// Each shift can have shift.weekOverrides = { "2026-06-22": [day0,day1,...day6], ... }
+// keyed by that week's Monday (weekKey). If a week has an override, those 7 days
+// are used INSTEAD of the recurring shift.days pattern for that week only.
+function getWeekDays(shift, weekKeyStr){
+  if(shift.weekOverrides && shift.weekOverrides[weekKeyStr]){
+    return shift.weekOverrides[weekKeyStr];
+  }
+  return shift.days; // fall back to recurring default pattern
+}
+function getDayForDate(shift, date){
+  const wk=weekKey(date);
+  const di=dow(date);
+  const days=getWeekDays(shift, wk);
+  return days[di];
+}
+function hasWeekOverride(shift, weekKeyStr){
+  return !!(shift.weekOverrides && shift.weekOverrides[weekKeyStr]);
+}
+function setWeekOverride(shift, weekKeyStr, days){
+  if(!shift.weekOverrides)shift.weekOverrides={};
+  shift.weekOverrides[weekKeyStr]=days;
+}
+function clearWeekOverride(shift, weekKeyStr){
+  if(shift.weekOverrides)delete shift.weekOverrides[weekKeyStr];
+}
 function fmtMoney(n){return'$'+n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}
 function weekLabel(key){if(!key)return'';const[y,mo,d]=key.split('-').map(Number);const mon=new Date(y,mo-1,d);const sun=addDays(mon,6);return`${MONTHS[mon.getMonth()].slice(0,3)} ${mon.getDate()} – ${MONTHS[sun.getMonth()].slice(0,3)} ${sun.getDate()}, ${sun.getFullYear()}`}
 
@@ -896,6 +923,8 @@ let PAYROLL_TAB='timesheet';
 let PAYROLL_PERIOD=''; // selected pay period key, '' = current
 let M=null;
 let _editDays=null;
+let _editMode='default'; // 'default' | 'week'
+let _editShiftCtx=null;  // {wcId, personId, weekKey}
 let CAL_WEEK_MODE='timeline'; // 'grid' | 'timeline'
 let CAL_FILTER_WC='all';    // wcId or 'all'
 let CAL_FILTER_PERSON='all'; // personId or 'all'
@@ -913,6 +942,17 @@ function upsertShift(wcId,personId,days){
   const ex=wc.shifts.find(s=>s.personId===personId);
   if(ex){ex.days=days;save();render();return;}
   wc.shifts.push({id:uid(),personId,days});save();render();
+}
+function upsertShiftWeek(wcId,personId,weekKeyStr,days){
+  const wc=S.wcs.find(w=>w.id===wcId);if(!wc)return;
+  let ex=wc.shifts.find(s=>s.personId===personId);
+  if(!ex){
+    // No recurring shift yet — create one with blank default, then set the override
+    ex={id:uid(),personId,days:defaultDays().map(d=>({active:false,start:d.start,end:d.end}))};
+    wc.shifts.push(ex);
+  }
+  setWeekOverride(ex,weekKeyStr,days);
+  save();render();
 }
 function removeShift(wcId,shiftId){const wc=S.wcs.find(w=>w.id===wcId);if(wc){wc.shifts=wc.shifts.filter(s=>s.id!==shiftId);save();render()}}
 function addNotice(text){if(!text.trim())return;S.notices.unshift({id:uid(),text:text.trim(),date:todayStr(),author:SESSION?.displayName||'Admin'});save();render()}
@@ -944,7 +984,7 @@ function generateTodaysLogs(){
   S.wcs.forEach(wc=>{
     if(!wc.shifts)return;
     wc.shifts.forEach(sh=>{
-      const dayData=sh.days[di];
+      const dayData=getDayForDate(sh,today);
       if(!dayData?.active)return;
       const exists=S.shiftLogs.find(l=>l.personId===sh.personId&&l.wcId===wc.id&&l.dateKey===dk);
       if(exists)return;
@@ -1103,8 +1143,9 @@ function getMyUpcomingShifts(){
     const d=addDays(today,i);const di=dow(d);const dk=dateKey(d);
     S.wcs.forEach(wc=>{
       const sh=wc.shifts.find(s=>s.personId===me.id);
-      if(sh&&sh.days[di]?.active&&!isOnLeave(me.id,dk)){
-        result.push({date:d,di,dk,wc,day:sh.days[di]});
+      const dayData=sh?getDayForDate(sh,d):null;
+      if(dayData?.active&&!isOnLeave(me.id,dk)){
+        result.push({date:d,di,dk,wc,day:dayData});
       }
     });
   }
@@ -1119,14 +1160,13 @@ function getCoverageAlerts(){
   // Only warn about tomorrow — stations with zero people scheduled (or all on leave)
   const today=new Date();today.setHours(0,0,0,0);
   const tomorrow=addDays(today,1);
-  const di=dow(tomorrow);
   const dk=dateKey(tomorrow);
   const alerts=[];
   if(!S.wcs.length)return alerts;
   S.wcs.forEach(wc=>{
     if(!wc.shifts.length)return; // station has no shifts set up
     const sc=scFor(wc.id);
-    const scheduled=wc.shifts.filter(sh=>sh.days[di]?.active);
+    const scheduled=wc.shifts.filter(sh=>getDayForDate(sh,tomorrow)?.active);
     const actuallyWorking=scheduled.filter(sh=>!isOnLeave(sh.personId,dk));
     if(scheduled.length===0||actuallyWorking.length===0){
       const reason=scheduled.length===0?'Nobody scheduled':`All scheduled workers on leave`;
@@ -1313,13 +1353,30 @@ function renderModal(){
     const wc=S.wcs.find(w=>w.id===M.wcId)||activeWC();
     const p=S.people.find(x=>x.id===M.personId);
     const ex=wc?.shifts.find(s=>s.personId===M.personId);
-    _editDays=ex?JSON.parse(JSON.stringify(ex.days)):defaultDays();
-    const sc=scFor(wc?.id);
     const wkMon=weekStart(CAL_DATE);
+    const wkk=weekKey(CAL_DATE);
     const wkSun=addDays(wkMon,6);
     const wkLabel=`${MONTHS[wkMon.getMonth()].slice(0,3)} ${wkMon.getDate()} – ${MONTHS[wkSun.getMonth()].slice(0,3)} ${wkSun.getDate()}`;
+    const isThisRealWeek=sameDay(wkMon,weekStart(new Date()));
+    const overrideExists=ex?hasWeekOverride(ex,wkk):false;
+    // _editMode: 'default' = edit the recurring weekly pattern (applies to all weeks without an override)
+    //            'week'    = edit just this specific week (only this week, doesn't touch other weeks)
+    _editShiftCtx={wcId:wc?.id,personId:M.personId,weekKey:wkk};
+    _editMode=overrideExists?'week':'default';
+    _editDays=ex?JSON.parse(JSON.stringify(getWeekDays(ex,wkk))):defaultDays();
+
+    const sc=scFor(wc?.id);
     box.innerHTML=`<h3>${ex?'Edit':'Assign'} shifts — <strong>${p?.name||''}</strong></h3>
-      <div class="sub">Station: <span style="font-weight:700;color:${sc.tx}">${wc?.name||''}</span> &nbsp;·&nbsp; Set individual hours per day. <span style="color:var(--text3)">Dates shown are for the week you're viewing: ${wkLabel}.</span></div>
+      <div class="sub">Station: <span style="font-weight:700;color:${sc.tx}">${wc?.name||''}</span> &nbsp;·&nbsp; Viewing week: <strong>${wkLabel}</strong>${isThisRealWeek?' (current)':''}</div>
+      ${ex?`<div style="display:flex;gap:6px;margin-bottom:.85rem">
+        <button type="button" id="mode-default-btn" class="btn sm${_editMode==='default'?' primary':''}" onclick="setEditMode('default')" style="flex:1"><i class="ti ti-repeat"></i> Default pattern (every week)</button>
+        <button type="button" id="mode-week-btn" class="btn sm${_editMode==='week'?' primary':''}" onclick="setEditMode('week')" style="flex:1"><i class="ti ti-calendar-event"></i> This week only</button>
+      </div>
+      <div style="font-size:11px;color:var(--text3);margin:-.5rem 0 .85rem">
+        ${_editMode==='default'
+          ?'Changes here update the recurring weekly schedule used for every week (unless a week has its own override).'
+          :`Changes here apply ONLY to ${wkLabel} — other weeks keep using the default pattern.${overrideExists?` <button type="button" onclick="removeWeekOverrideAndClose()" style="color:#b91c1c;text-decoration:underline;background:none;border:none;cursor:pointer;font-size:11px;padding:0">Remove this week override</button>`:''}`}
+      </div>`:''}
       <div class="day-grid" id="day-grid">${buildDayGrid()}</div>
       <div id="hours-preview" style="margin-top:.75rem;font-size:12px;color:var(--text2)"></div>
       <div class="mfooter">
@@ -1736,7 +1793,36 @@ window.doSaveStation=function(id){
   setStationCapacity(id,cap);
   closeModal();render();
 }
-window.doSaveShift=function(wcId,pid){const days=JSON.parse(JSON.stringify(_editDays));closeModal();upsertShift(wcId,pid,days)}
+window.doSaveShift=function(wcId,pid){
+  const days=JSON.parse(JSON.stringify(_editDays));
+  const mode=_editMode;
+  const ctx=_editShiftCtx;
+  closeModal();
+  if(mode==='week' && ctx && ctx.weekKey){
+    upsertShiftWeek(wcId,pid,ctx.weekKey,days);
+  } else {
+    upsertShift(wcId,pid,days);
+  }
+}
+window.setEditMode=function(mode){
+  if(mode===_editMode)return;
+  const ex=(S.wcs.find(w=>w.id===_editShiftCtx?.wcId)||{}).shifts?.find(s=>s.personId===_editShiftCtx?.personId);
+  _editMode=mode;
+  if(ex && _editShiftCtx){
+    const wkk=_editShiftCtx.weekKey;
+    _editDays=mode==='week'
+      ? JSON.parse(JSON.stringify(getWeekDays(ex,wkk)))
+      : JSON.parse(JSON.stringify(ex.days));
+  }
+  openModal('editShift',{wcId:_editShiftCtx.wcId,personId:_editShiftCtx.personId});
+}
+window.removeWeekOverrideAndClose=function(){
+  const ctx=_editShiftCtx;if(!ctx)return;
+  const wc=S.wcs.find(w=>w.id===ctx.wcId);
+  const ex=wc?.shifts.find(s=>s.personId===ctx.personId);
+  if(ex){clearWeekOverride(ex,ctx.weekKey);save();}
+  closeModal();render();
+}
 window.doAddNote=function(){const t=document.getElementById('m-note')?.value;closeModal();addNotice(t)}
 window.doSubmitLeave=function(){
   const pid=isAdmin()?document.getElementById('m-lr-person')?.value:
@@ -1770,6 +1856,12 @@ window.removePerson=removePerson;window.removeWC=removeWC;window.removeShift=rem
 window.setView=setView;window.toggleCalMenu=toggleCalMenu;window.setPayrollTab=function(t){PAYROLL_TAB=t;renderPayrollPanel()};
 window.setActiveWC=function(id){S.activeWC=id;if(id!=='all')save();render()};
 window.navWeek=function(n){CAL_DATE=addDays(CAL_DATE,n*7);render()}
+window.jumpToWeekAndEdit=function(dateKeyStr,wcId,personId){
+  const[y,mo,d]=dateKeyStr.split('-').map(Number);
+  CAL_DATE=new Date(y,mo-1,d);
+  VIEW='cal';CAL_SUB='week';
+  openModal('editShift',{wcId,personId});
+}
 window.setCalWeekMode=function(m){CAL_WEEK_MODE=m;render()}
 window.setCalFilterWC=function(v){CAL_FILTER_WC=v;render()}
 window.setCalFilterPerson=function(v){CAL_FILTER_PERSON=v;render()}
@@ -2086,8 +2178,9 @@ function renderWeek(panel){
         const isTod=sameDay(d,today);
         const blocks=showWCs.map(wc=>{
           const sh=wc.shifts.find(s=>s.personId===person.id);
-          if(!sh||!sh.days[di]?.active)return null;
-          const sc=scFor(wc.id);const dd=sh.days[di];
+          const dd=sh?getDayForDate(sh,d):null;
+          if(!dd?.active)return null;
+          const sc=scFor(wc.id);
           return`<div class="shift-pill" style="background:${sc.bg};color:${sc.tx};border-left-color:${sc.solid}">
             <span>${fmtS(dd.start)}–${fmtS(dd.end)}</span>
             <span style="font-size:9px;opacity:.7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:40px">${wc.name}</span>
@@ -2127,9 +2220,9 @@ function renderWeek(panel){
       const personRows=showPeople.map(person=>{
         const bars=showWCs.map(wc=>{
           const sh=wc.shifts.find(s=>s.personId===person.id);
-          if(!sh||!sh.days[di]?.active)return null;
+          const dd=sh?getDayForDate(sh,d):null;
+          if(!dd?.active)return null;
           const sc=scFor(wc.id);
-          const dd=sh.days[di];
           const[sh2,sm]=dd.start.split(':').map(Number);
           const[eh,em]=dd.end.split(':').map(Number);
           let startFrac=(sh2+sm/60-START_HR)/TOTAL_HRS;
@@ -2201,10 +2294,11 @@ function renderMonth(panel){
     const entries=[];
     S.wcs.forEach(wc=>{S.people.forEach(person=>{
       const sh=wc.shifts.find(s=>s.personId===person.id);
-      if(sh&&sh.days[di]?.active){const sc=scFor(wc.id);entries.push({person,wc,day:sh.days[di],sc});}
+      const dd=sh?getDayForDate(sh,d):null;
+      if(dd?.active){const sc=scFor(wc.id);entries.push({person,wc,day:dd,sc});}
     })});
     const show=entries.slice(0,3);const extra=entries.length-3;
-    const pills=show.map(e=>`<div class="mo-pill" style="background:${e.sc.bg};color:${e.sc.tx};border-left-color:${e.sc.solid}" onclick="${isAdmin()?`openModal('editShift',{wcId:'${e.wc.id}',personId:'${e.person.id}'})`:'void(0)'}" title="${e.person.name} @ ${e.wc.name}">
+    const pills=show.map(e=>`<div class="mo-pill" style="background:${e.sc.bg};color:${e.sc.tx};border-left-color:${e.sc.solid}" onclick="${isAdmin()?`jumpToWeekAndEdit('${dateKey(d)}','${e.wc.id}','${e.person.id}')`:'void(0)'}" title="${e.person.name} @ ${e.wc.name}">
       <span style="overflow:hidden;text-overflow:ellipsis;flex:1">${e.person.name.split(' ')[0]}</span>
       <span style="font-size:9px;opacity:.75;flex-shrink:0">${fmtS(e.day.start)}</span>
     </div>`).join('');
@@ -2537,9 +2631,10 @@ function renderRosterAndWeather(){
   S.wcs.forEach(wc=>{
     S.people.forEach(person=>{
       const sh=wc.shifts.find(s=>s.personId===person.id);
-      if(!sh||!sh.days[di]?.active)return;
+      const dd=sh?getDayForDate(sh,today):null;
+      if(!dd?.active)return;
       if(isOnLeave(person.id,dk))return;
-      workers.push({person,wc,day:sh.days[di],sc:scFor(wc.id)});
+      workers.push({person,wc,day:dd,sc:scFor(wc.id)});
     });
   });
   const list=document.getElementById('roster-list');
@@ -2569,12 +2664,13 @@ function renderRosterAndWeather(){
   if(!nextShiftList)return;
   let nextWorkers=[],nextDate=null;
   for(let off=1;off<=7;off++){
-    const d=addDays(today,off);const ndi=dow(d);const ndk=dateKey(d);
+    const d=addDays(today,off);const ndk=dateKey(d);
     const nw=[];
     S.wcs.forEach(wc=>{S.people.forEach(person=>{
       const sh=wc.shifts.find(s=>s.personId===person.id);
-      if(!sh||!sh.days[ndi]?.active||isOnLeave(person.id,ndk))return;
-      nw.push({person,wc,day:sh.days[ndi],sc:scFor(wc.id)});
+      const dd=sh?getDayForDate(sh,d):null;
+      if(!dd?.active||isOnLeave(person.id,ndk))return;
+      nw.push({person,wc,day:dd,sc:scFor(wc.id)});
     })});
     if(nw.length){nextWorkers=nw;nextDate=d;break;}
   }
